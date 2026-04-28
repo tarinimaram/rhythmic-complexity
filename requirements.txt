@@ -1,0 +1,6 @@
+thebeat
+librosa
+numpy
+matplotlib
+scipy
+pytest
