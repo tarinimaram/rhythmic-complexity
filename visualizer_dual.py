@@ -112,6 +112,58 @@ def _plot_onset_grid(
     ax.set_xlabel("Time (ms)")
     ax.set_title("Onset Alignment")
     ax.legend(loc="upper right", fontsize=8)
+    ax.set_axisbelow(True)
+    ax.minorticks_on()
+    ax.grid(True, which="major", linestyle="--", linewidth=1.0, alpha=0.8, color="dimgray")
+    ax.grid(True, which="minor", linestyle="--", linewidth=0.6, alpha=0.6, color="darkgray")
+
+
+def plot_ioi_deviations(
+    per_onset: list[dict],
+    noise_sd: float,
+    title: str = "Per-Onset Relational Deviation",
+) -> None:
+    """
+    Show a bar for each onset indicating how far the human's relational offset
+    was from the expected offset against the partner channel.
+    Signed: positive = human onset was further from the beat than expected,
+            negative = closer to the beat than expected.
+    The shaded band marks the ±tolerance window; bars are green inside it and red outside.
+    """
+    tol = 2.0 * noise_sd
+    n = len(per_onset)
+    deviations = np.array([p["actual_offset_ms"] - p["expected_offset_ms"] for p in per_onset])
+    passed = np.array([p["pass"] for p in per_onset])
+    n_pass = int(np.sum(passed))
+
+    fig, ax = plt.subplots(figsize=(max(10, n * 0.6), 5))
+
+    x = np.arange(1, n + 1)
+    colors = ["forestgreen" if p else "tomato" for p in passed]
+    ax.bar(x, deviations, color=colors, edgecolor="black", linewidth=0.6, zorder=3)
+
+    ax.axhspan(-tol, tol, alpha=0.12, color="limegreen", zorder=1)
+    ax.axhline(tol, color="green", linestyle="--", linewidth=1.2, zorder=2)
+    ax.axhline(-tol, color="green", linestyle="--", linewidth=1.2, zorder=2)
+    ax.axhline(0, color="black", linewidth=0.8, zorder=2)
+
+    ax.set_xticks(x)
+    ax.set_xlabel("Onset #")
+    ax.set_ylabel("Relational offset error (ms)  [+ = further from beat than expected, − = closer]")
+    ax.set_title(f"{title}   ({n_pass}/{n} passed)")
+
+    ax.grid(True, which="major", linestyle="--", linewidth=0.8, alpha=0.7, color="dimgray", zorder=0)
+    ax.grid(True, which="minor", linestyle=":", linewidth=0.4, alpha=0.5, color="darkgray", zorder=0)
+    ax.minorticks_on()
+    ax.set_axisbelow(True)
+
+    pass_patch = mpatches.Patch(color="forestgreen", label="PASS")
+    fail_patch = mpatches.Patch(color="tomato", label="FAIL")
+    tol_patch = mpatches.Patch(color="limegreen", alpha=0.4, label=f"Tolerance ±{tol:.0f} ms")
+    ax.legend(handles=[pass_patch, fail_patch, tol_patch], fontsize=8, loc="upper right")
+
+    plt.tight_layout()
+    plt.show()
 
 
 def _plot_accuracy_bars(

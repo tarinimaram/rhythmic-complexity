@@ -35,7 +35,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                         help="Comma-separated reference rhythm IOIs in ms.")
     parser.add_argument("--noise_sd", type=float, default=30.0, metavar="MS",
                         help="Tolerance SD in ms (pass window = ±2×noise_sd).")
-    parser.add_argument("--pass_threshold", type=float, default=70.0, metavar="PCT",
+    parser.add_argument("--pass_threshold", type=float, default=100.0, metavar="PCT",
                         help="Minimum accuracy %% required for each check to PASS.")
     parser.add_argument("--algorithm", choices=["fixed", "sliding", "both"], default="both",
                         help="Chunking algorithm(s) to run.")
@@ -51,7 +51,8 @@ def _parse_iois(raw: str) -> np.ndarray:
         raise ValueError(f"Could not parse IOI list: {raw!r}") from exc
 
 
-def _extract_human_onsets(wav_path: str) -> np.ndarray:
+def _extract_human_onsets(wav_path: str) -> tuple[np.ndarray, float]:
+    """Return (iois_ms, first_onset_ms) where first_onset_ms is the silence before the first note."""
     y, sr = librosa.load(wav_path, sr=None, mono=True)
     frames = librosa.onset.onset_detect(y=y, sr=sr, hop_length=512, backtrack=True, units="frames")
     times_sec = librosa.frames_to_time(frames, sr=sr, hop_length=512)
@@ -60,7 +61,7 @@ def _extract_human_onsets(wav_path: str) -> np.ndarray:
             f"Only {len(times_sec)} onset(s) detected in '{wav_path}'. "
             "Need at least 2 to compute IOIs."
         )
-    return np.diff(times_sec) * 1000.0  # ms
+    return np.diff(times_sec) * 1000.0, float(times_sec[0] * 1000.0)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -82,11 +83,21 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"\nExtracting onsets from: {args.test}")
     try:
-        human_iois = _extract_human_onsets(args.test)
+        human_iois, silence_ms = _extract_human_onsets(args.test)
     except Exception as exc:
         print(f"ERROR extracting human onsets: {exc}")
         return 1
     print(f"  Detected {len(human_iois)+1} onsets → {len(human_iois)} IOIs")
+    print(f"  First onset at {silence_ms:.1f} ms (silence before playing)")
+
+    # Determine which reference phrase the human started at.
+    # The phrase duration is the sum of one chunk's worth of reference IOIs.
+    ref_iois_for_part = beat_iois if args.human_part == "beat" else rhythm_iois
+    phrase_len = 4 if args.human_part == "beat" else 7
+    phrase_duration_ms = float(np.sum(ref_iois_for_part[:phrase_len]))
+    start_chunk = int(round(silence_ms / phrase_duration_ms))
+    start_chunk = max(0, min(start_chunk, 3))  # clamp to [0, N_CHUNKS-1]
+    print(f"  Phrase ≈ {phrase_duration_ms:.0f} ms → human starts at chunk {start_chunk + 1}")
 
     # Full dual analysis (no chunking)
     result = analyze_dual(
@@ -108,6 +119,7 @@ def main(argv: list[str] | None = None) -> int:
         fixed_result = fixed_dual_chunks(
             beat_iois, rhythm_iois, human_iois,
             args.human_part, args.noise_sd, args.pass_threshold,
+            start_chunk=start_chunk,
         )
         print_chunk_dual_report(fixed_result, "fixed", args.pass_threshold)
 
@@ -115,12 +127,15 @@ def main(argv: list[str] | None = None) -> int:
         sliding_result = sliding_dual_window(
             beat_iois, rhythm_iois, human_iois,
             args.human_part, args.noise_sd, args.pass_threshold,
+            start_chunk=start_chunk,
         )
         print_chunk_dual_report(sliding_result, "sliding", args.pass_threshold)
 
     if args.plot:
-        from visualizer_dual import plot_dual_all
-        human_onsets_ms = _onsets_from_iois(human_iois)
+        from visualizer_dual import plot_dual_all, plot_ioi_deviations
+        # Offset human onsets by the detected silence so they align to the correct
+        # position on the reference timeline rather than always starting at t=0.
+        human_onsets_ms = silence_ms + _onsets_from_iois(human_iois)
         beat_ref_onsets_ms = _onsets_from_iois(beat_iois)
         rhythm_ref_onsets_ms = _onsets_from_iois(rhythm_iois)
         plot_dual_all(
@@ -133,6 +148,16 @@ def main(argv: list[str] | None = None) -> int:
             fixed_result=fixed_result,
             pass_threshold=args.pass_threshold,
         )
+
+        # Per-onset relational deviation chart: use the exact same per-onset data
+        # that fixed_dual_chunks computed (same per-chunk offsets) so the chart
+        # is guaranteed to be consistent with the chunk bar graphs.
+        if fixed_result and fixed_result.get("per_onset_relational"):
+            plot_ioi_deviations(
+                fixed_result["per_onset_relational"],
+                args.noise_sd,
+                title=f"Per-Onset Relational Deviation — {args.human_part.capitalize()}",
+            )
 
     overall = result["overall_pass"]
     if fixed_result:

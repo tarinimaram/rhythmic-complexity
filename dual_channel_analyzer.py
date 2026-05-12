@@ -166,7 +166,7 @@ def analyze_dual(
     human_iois: list[float] | np.ndarray,
     human_part: str,
     noise_sd: float,
-    pass_threshold: float = 70.0,
+    pass_threshold: float = 100.0,
 ) -> dict:
     """
     Run both accuracy checks and return a combined verdict.
