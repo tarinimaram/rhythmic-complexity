@@ -83,8 +83,13 @@ def check_relational(
     human_onset_offset_ms: float = 0.0,
 ) -> dict:
     """
-    For each human onset, compare its actual offset from the partner channel's
-    nearest onset against the expected offset from the reference.
+    For each human onset, compare its absolute timing against the corresponding
+    reference onset at the same position in the sequence. The deviation is
+    (human_onset - reference_onset): positive means the human was late, negative
+    means early.
+
+    human_onset_offset_ms positions the human's first note in the global
+    reference timeline (e.g. ref_onsets[chunk_start]).
 
     Parameters
     ----------
@@ -97,7 +102,7 @@ def check_relational(
     Returns
     -------
     dict:
-        per_onset        : list[dict] — per-onset relational error detail
+        per_onset        : list[dict] — per-onset deviation detail
         accuracy_pct     : float
         pass             : bool
     """
@@ -106,43 +111,27 @@ def check_relational(
 
     tol = _TOLERANCE_MULT * noise_sd
 
+    ref_iois = beat_iois if human_part == "beat" else rhythm_iois
     human_onsets = _onsets_from_iois(human_iois) + human_onset_offset_ms
-    beat_onsets = _onsets_from_iois(beat_iois)
-    rhythm_onsets = _onsets_from_iois(rhythm_iois)
+    ref_onsets = _onsets_from_iois(ref_iois)
 
-    if human_part == "beat":
-        ref_same = beat_onsets      # reference onsets for the part the human played
-        ref_partner = rhythm_onsets # partner channel the human should align against
-    else:
-        ref_same = rhythm_onsets
-        ref_partner = beat_onsets
-
-    n = min(len(human_onsets), len(ref_same))
+    # Anchor: find which reference onset the human's first note corresponds to.
+    start_ref_idx = _nearest_idx(human_onsets[0], ref_onsets)
+    n = min(len(human_onsets), len(ref_onsets) - start_ref_idx)
 
     per_onset = []
     for i in range(n):
         h_onset = human_onsets[i]
-
-        # Actual offset of this human onset from nearest partner onset
-        nearest_partner_idx = _nearest_idx(h_onset, ref_partner)
-        actual_offset = h_onset - ref_partner[nearest_partner_idx]
-
-        # Expected offset: find closest reference same-part onset, then its offset
-        # from *its* nearest partner onset
-        nearest_ref_same_idx = _nearest_idx(h_onset, ref_same)
-        ref_same_onset = ref_same[nearest_ref_same_idx]
-        nearest_ref_partner_idx = _nearest_idx(ref_same_onset, ref_partner)
-        expected_offset = ref_same_onset - ref_partner[nearest_ref_partner_idx]
-
-        relational_error = abs(actual_offset - expected_offset)
+        r_onset = ref_onsets[start_ref_idx + i]
+        signed_dev = h_onset - r_onset
         per_onset.append({
             "index": i,
             "human_onset_ms": float(h_onset),
-            "actual_offset_ms": float(actual_offset),
-            "expected_offset_ms": float(expected_offset),
-            "relational_error_ms": float(relational_error),
+            "actual_offset_ms": float(h_onset),
+            "expected_offset_ms": float(r_onset),
+            "relational_error_ms": float(abs(signed_dev)),
             "tolerance_ms": float(tol),
-            "pass": bool(relational_error <= tol),
+            "pass": bool(abs(signed_dev) <= tol),
         })
 
     n_pass = sum(p["pass"] for p in per_onset)
@@ -232,8 +221,8 @@ def print_dual_report(result: dict, noise_sd: float, pass_threshold: float) -> N
               f"{p['deviation_ms']:>8.1f}  {flag:>5}")
     print(f"  Accuracy: {dr['accuracy_pct']:.1f}%  →  {'PASS' if result['direct_pass'] else 'FAIL'}")
 
-    print("\n--- Check 2: Cross-Channel Relational Accuracy ---")
-    print(f"{'#':>4}  {'Human Onset':>12}  {'Actual Off':>11}  {'Expect Off':>11}  {'Error':>8}  {'Pass':>5}")
+    print("\n--- Check 2: Onset Position Accuracy ---")
+    print(f"{'#':>4}  {'Human Onset':>12}  {'Ref Onset':>11}  {'Deviation':>11}  {'Error':>8}  {'Pass':>5}")
     print("-" * 60)
     for p in rr["per_onset"]:
         flag = "PASS" if p["pass"] else "FAIL"

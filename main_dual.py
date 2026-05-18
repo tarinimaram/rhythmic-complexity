@@ -132,12 +132,11 @@ def main(argv: list[str] | None = None) -> int:
         print_chunk_dual_report(sliding_result, "sliding", args.pass_threshold)
 
     if args.plot:
-        from visualizer_dual import plot_dual_all, plot_ioi_deviations
-        # Offset human onsets by the detected silence so they align to the correct
-        # position on the reference timeline rather than always starting at t=0.
+        from visualizer_dual import plot_dual_all
         human_onsets_ms = silence_ms + _onsets_from_iois(human_iois)
         beat_ref_onsets_ms = _onsets_from_iois(beat_iois)
         rhythm_ref_onsets_ms = _onsets_from_iois(rhythm_iois)
+        per_onset = fixed_result.get("per_onset_relational") if fixed_result else None
         plot_dual_all(
             beat_array=beat_array,
             rhythm_array=rhythm_array,
@@ -147,17 +146,9 @@ def main(argv: list[str] | None = None) -> int:
             rhythm_ref_onsets_ms=rhythm_ref_onsets_ms,
             fixed_result=fixed_result,
             pass_threshold=args.pass_threshold,
+            per_onset_relational=per_onset,
+            noise_sd=args.noise_sd,
         )
-
-        # Per-onset relational deviation chart: use the exact same per-onset data
-        # that fixed_dual_chunks computed (same per-chunk offsets) so the chart
-        # is guaranteed to be consistent with the chunk bar graphs.
-        if fixed_result and fixed_result.get("per_onset_relational"):
-            plot_ioi_deviations(
-                fixed_result["per_onset_relational"],
-                args.noise_sd,
-                title=f"Per-Onset Relational Deviation — {args.human_part.capitalize()}",
-            )
 
     overall = result["overall_pass"]
     if fixed_result:

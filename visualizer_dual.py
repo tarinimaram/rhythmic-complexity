@@ -1,11 +1,12 @@
 """
 visualizer_dual.py — Dual-Channel Visualizations
 
-2×2 grid:
+2×2 grid (+ optional full-width bottom row):
   Top-left    : both reference channel waveforms overlaid
   Top-right   : human onset times vs. both reference onset grids
-  Bottom-left : per-chunk direct IOI accuracy bar chart
-  Bottom-right: per-chunk relational accuracy bar chart
+  Mid-left    : per-chunk direct IOI accuracy bar chart
+  Mid-right   : per-chunk relational accuracy bar chart
+  Bottom (opt): per-onset deviation from reference (spans full width)
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ from __future__ import annotations
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
+from matplotlib.gridspec import GridSpec
 
 
 def plot_dual_all(
@@ -23,50 +25,91 @@ def plot_dual_all(
     beat_ref_onsets_ms: np.ndarray,
     rhythm_ref_onsets_ms: np.ndarray,
     fixed_result: dict | None = None,
-    pass_threshold: float = 70.0,
+    pass_threshold: float = 100.0,
+    per_onset_relational: list[dict] | None = None,
+    noise_sd: float = 30.0,
 ) -> None:
     """
-    Display the full 2×2 diagnostic grid.
+    Display the full diagnostic grid.
 
     Parameters
     ----------
-    beat_array           : left-channel audio samples
-    rhythm_array         : right-channel audio samples
-    sample_rate          : audio sample rate (Hz)
-    human_onsets_ms      : human onset times in ms (absolute, from cumsum of IOIs)
-    beat_ref_onsets_ms   : reference beat onset times in ms
-    rhythm_ref_onsets_ms : reference rhythm onset times in ms
-    fixed_result         : output dict from fixed_dual_chunks (for bottom row)
-    pass_threshold       : threshold used for PASS/FAIL colouring
+    beat_array            : left-channel audio samples
+    rhythm_array          : right-channel audio samples
+    sample_rate           : audio sample rate (Hz)
+    human_onsets_ms       : human onset times in ms
+    beat_ref_onsets_ms    : reference beat onset times in ms
+    rhythm_ref_onsets_ms  : reference rhythm onset times in ms
+    fixed_result          : output dict from fixed_dual_chunks (for chunk rows)
+    pass_threshold        : threshold used for PASS/FAIL colouring
+    per_onset_relational  : per-onset data from fixed_dual_chunks for the
+                            deviation chart; if provided a third row is added
+    noise_sd              : tolerance SD in ms (used for the deviation chart)
     """
-    fig, axes = plt.subplots(2, 2, figsize=(14, 9))
+    has_ioi = bool(per_onset_relational)
+
+    if has_ioi:
+        fig = plt.figure(figsize=(14, 13))
+        gs = GridSpec(3, 2, figure=fig, hspace=0.45, wspace=0.3)
+        ax00 = fig.add_subplot(gs[0, 0])
+        ax01 = fig.add_subplot(gs[0, 1])
+        ax10 = fig.add_subplot(gs[1, 0])
+        ax11 = fig.add_subplot(gs[1, 1])
+        ax_ioi = fig.add_subplot(gs[2, :])
+    else:
+        fig, axes = plt.subplots(2, 2, figsize=(14, 9))
+        ax00, ax01 = axes[0, 0], axes[0, 1]
+        ax10, ax11 = axes[1, 0], axes[1, 1]
+
     fig.suptitle("Dual-Channel Rhythm Analysis", fontsize=14)
 
-    _plot_overlaid_waveforms(axes[0, 0], beat_array, rhythm_array, sample_rate)
-    _plot_onset_grid(axes[0, 1], human_onsets_ms, beat_ref_onsets_ms, rhythm_ref_onsets_ms)
+    _plot_overlaid_waveforms(ax00, beat_array, rhythm_array, sample_rate)
+    _plot_onset_grid(ax01, human_onsets_ms, beat_ref_onsets_ms, rhythm_ref_onsets_ms)
 
     if fixed_result is not None:
         _plot_accuracy_bars(
-            axes[1, 0],
+            ax10,
             fixed_result["chunk_direct_accuracies"],
             pass_threshold,
             title="Fixed Chunks — Direct IOI Accuracy",
         )
         _plot_accuracy_bars(
-            axes[1, 1],
+            ax11,
             fixed_result["chunk_relational_accuracies"],
             pass_threshold,
             title="Fixed Chunks — Relational Accuracy",
         )
     else:
-        for ax in (axes[1, 0], axes[1, 1]):
+        for ax in (ax10, ax11):
             ax.text(0.5, 0.5, "No fixed-chunk data", ha="center", va="center",
                     transform=ax.transAxes, color="gray")
             ax.set_axis_off()
 
+    if has_ioi:
+        _plot_ioi_deviations_ax(ax_ioi, per_onset_relational, noise_sd)
+
     plt.tight_layout()
     plt.show()
 
+
+# ---------------------------------------------------------------------------
+# Standalone IOI deviation figure (kept for external use)
+# ---------------------------------------------------------------------------
+
+def plot_ioi_deviations(
+    per_onset: list[dict],
+    noise_sd: float,
+    title: str = "Per-Onset Deviation from Reference",
+) -> None:
+    fig, ax = plt.subplots(figsize=(max(10, len(per_onset) * 0.6), 5))
+    _plot_ioi_deviations_ax(ax, per_onset, noise_sd, title=title)
+    plt.tight_layout()
+    plt.show()
+
+
+# ---------------------------------------------------------------------------
+# Private panel helpers
+# ---------------------------------------------------------------------------
 
 def _plot_overlaid_waveforms(
     ax: plt.Axes,
@@ -118,25 +161,17 @@ def _plot_onset_grid(
     ax.grid(True, which="minor", linestyle="--", linewidth=0.6, alpha=0.6, color="darkgray")
 
 
-def plot_ioi_deviations(
+def _plot_ioi_deviations_ax(
+    ax: plt.Axes,
     per_onset: list[dict],
     noise_sd: float,
-    title: str = "Per-Onset Relational Deviation",
+    title: str = "Per-Onset Deviation from Reference",
 ) -> None:
-    """
-    Show a bar for each onset indicating how far the human's relational offset
-    was from the expected offset against the partner channel.
-    Signed: positive = human onset was further from the beat than expected,
-            negative = closer to the beat than expected.
-    The shaded band marks the ±tolerance window; bars are green inside it and red outside.
-    """
     tol = 2.0 * noise_sd
     n = len(per_onset)
     deviations = np.array([p["actual_offset_ms"] - p["expected_offset_ms"] for p in per_onset])
     passed = np.array([p["pass"] for p in per_onset])
     n_pass = int(np.sum(passed))
-
-    fig, ax = plt.subplots(figsize=(max(10, n * 0.6), 5))
 
     x = np.arange(1, n + 1)
     colors = ["forestgreen" if p else "tomato" for p in passed]
@@ -149,7 +184,7 @@ def plot_ioi_deviations(
 
     ax.set_xticks(x)
     ax.set_xlabel("Onset #")
-    ax.set_ylabel("Relational offset error (ms)  [+ = further from beat than expected, − = closer]")
+    ax.set_ylabel("Deviation from reference (ms)  [+ = late, − = early]")
     ax.set_title(f"{title}   ({n_pass}/{n} passed)")
 
     ax.grid(True, which="major", linestyle="--", linewidth=0.8, alpha=0.7, color="dimgray", zorder=0)
@@ -162,9 +197,6 @@ def plot_ioi_deviations(
     tol_patch = mpatches.Patch(color="limegreen", alpha=0.4, label=f"Tolerance ±{tol:.0f} ms")
     ax.legend(handles=[pass_patch, fail_patch, tol_patch], fontsize=8, loc="upper right")
 
-    plt.tight_layout()
-    plt.show()
-
 
 def _plot_accuracy_bars(
     ax: plt.Axes,
@@ -175,7 +207,8 @@ def _plot_accuracy_bars(
     x = np.arange(len(accuracies))
     colors = ["forestgreen" if a >= pass_threshold else "tomato" for a in accuracies]
     ax.bar(x, accuracies, color=colors, edgecolor="black", linewidth=0.6)
-    ax.axhline(pass_threshold, color="black", linestyle="--", linewidth=1, label=f"Threshold {pass_threshold:.0f}%")
+    ax.axhline(pass_threshold, color="black", linestyle="--", linewidth=1,
+               label=f"Threshold {pass_threshold:.0f}%")
     ax.set_xticks(x)
     ax.set_xticklabels([f"C{i+1}" for i in x], fontsize=9)
     ax.set_ylim(0, 110)

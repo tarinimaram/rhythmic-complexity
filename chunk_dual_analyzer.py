@@ -109,7 +109,9 @@ def fixed_dual_chunks(
         )
         direct_accs.append(d_acc)
         relational_accs.append(rel_acc)
-        all_per_onset.extend(per_onset)
+        # onset[0] is the entry onset before any IOI of this chunk; skip it so
+        # each entry in all_per_onset maps 1-to-1 with an IOI endpoint.
+        all_per_onset.extend(per_onset[1:])
 
     avg_scores = [(d + r) / 2.0 for d, r in zip(direct_accs, relational_accs)]
     best_idx = int(np.argmax(avg_scores))
