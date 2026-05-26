@@ -15,6 +15,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from matplotlib.gridspec import GridSpec
+from matplotlib.ticker import MultipleLocator, FuncFormatter
 
 
 def plot_dual_all(
@@ -156,7 +157,9 @@ def _plot_onset_grid(
     ax.set_title("Onset Alignment")
     ax.legend(loc="upper right", fontsize=8)
     ax.set_axisbelow(True)
-    ax.minorticks_on()
+    ax.xaxis.set_major_locator(MultipleLocator(600))
+    ax.xaxis.set_minor_locator(MultipleLocator(200))
+    ax.xaxis.set_major_formatter(FuncFormatter(lambda x, _: f"{int(x)}" if x % 1200 == 0 else ""))
     ax.grid(True, which="major", linestyle="--", linewidth=1.0, alpha=0.8, color="dimgray")
     ax.grid(True, which="minor", linestyle="--", linewidth=0.6, alpha=0.6, color="darkgray")
 
