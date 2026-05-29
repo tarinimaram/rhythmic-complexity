@@ -158,25 +158,14 @@ def analyze_dual(
     pass_threshold: float = 100.0,
 ) -> dict:
     """
-    Run both accuracy checks and return a combined verdict.
-
-    Parameters
-    ----------
-    beat_iois       : reference beat IOIs (ms), 28 values
-    rhythm_iois     : reference rhythm IOIs (ms), 28 values
-    human_iois      : human-performed IOIs (ms); trimmed to match reference length
-    human_part      : "beat" or "rhythm"
-    noise_sd        : tolerance SD (ms)
-    pass_threshold  : minimum accuracy % required for each check to PASS
+    Run direct IOI accuracy check and return verdict.
 
     Returns
     -------
     dict:
-        direct_result      : output of check_direct_ioi
-        relational_result  : output of check_relational
-        direct_pass        : bool
-        relational_pass    : bool
-        overall_pass       : bool
+        direct_result : output of check_direct_ioi
+        direct_pass   : bool
+        overall_pass  : bool
     """
     beat_iois = np.asarray(beat_iois, dtype=float)
     rhythm_iois = np.asarray(rhythm_iois, dtype=float)
@@ -187,24 +176,18 @@ def analyze_dual(
     human_iois = human_iois[:n]
 
     direct = check_direct_ioi(human_iois, ref_iois, noise_sd)
-    relational = check_relational(human_iois, beat_iois, rhythm_iois, human_part, noise_sd)
-
     direct_pass = direct["accuracy_pct"] >= pass_threshold
-    relational_pass = relational["accuracy_pct"] >= pass_threshold
 
     return {
         "direct_result": direct,
-        "relational_result": relational,
         "direct_pass": direct_pass,
-        "relational_pass": relational_pass,
-        "overall_pass": direct_pass and relational_pass,
+        "overall_pass": direct_pass,
     }
 
 
 def print_dual_report(result: dict, noise_sd: float, pass_threshold: float) -> None:
     tol = _TOLERANCE_MULT * noise_sd
     dr = result["direct_result"]
-    rr = result["relational_result"]
 
     print("\n" + "=" * 65)
     print("  DUAL-CHANNEL ANALYSIS REPORT")
@@ -212,7 +195,7 @@ def print_dual_report(result: dict, noise_sd: float, pass_threshold: float) -> N
     print(f"  Tolerance: ±{tol:.1f} ms  (noise_sd={noise_sd:.1f} ms × 2)")
     print(f"  Pass threshold: {pass_threshold:.0f}%")
 
-    print("\n--- Check 1: Direct IOI Match ---")
+    print("\n--- Direct IOI Match ---")
     print(f"{'#':>4}  {'Human':>9}  {'Ref':>9}  {'Dev':>9}  {'Pass':>5}")
     print("-" * 45)
     for p in dr["per_ioi"]:
@@ -220,15 +203,6 @@ def print_dual_report(result: dict, noise_sd: float, pass_threshold: float) -> N
         print(f"{p['index']+1:>4}  {p['human_ioi_ms']:>8.1f}  {p['ref_ioi_ms']:>8.1f}  "
               f"{p['deviation_ms']:>8.1f}  {flag:>5}")
     print(f"  Accuracy: {dr['accuracy_pct']:.1f}%  →  {'PASS' if result['direct_pass'] else 'FAIL'}")
-
-    print("\n--- Check 2: Onset Position Accuracy ---")
-    print(f"{'#':>4}  {'Human Onset':>12}  {'Ref Onset':>11}  {'Deviation':>11}  {'Error':>8}  {'Pass':>5}")
-    print("-" * 60)
-    for p in rr["per_onset"]:
-        flag = "PASS" if p["pass"] else "FAIL"
-        print(f"{p['index']+1:>4}  {p['human_onset_ms']:>11.1f}  {p['actual_offset_ms']:>10.1f}  "
-              f"{p['expected_offset_ms']:>10.1f}  {p['relational_error_ms']:>7.1f}  {flag:>5}")
-    print(f"  Accuracy: {rr['accuracy_pct']:.1f}%  →  {'PASS' if result['relational_pass'] else 'FAIL'}")
 
     print("\n" + "=" * 65)
     verdict = "PASS" if result["overall_pass"] else "FAIL"

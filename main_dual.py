@@ -15,7 +15,7 @@ import librosa
 
 from channel_splitter import split_channels
 from dual_channel_analyzer import analyze_dual, print_dual_report, _onsets_from_iois
-from chunk_dual_analyzer import fixed_dual_chunks, sliding_dual_window, print_chunk_dual_report
+from chunk_dual_analyzer import fixed_dual_chunks, print_chunk_dual_report
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -37,8 +37,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                         help="Tolerance SD in ms (pass window = ±2×noise_sd).")
     parser.add_argument("--pass_threshold", type=float, default=100.0, metavar="PCT",
                         help="Minimum accuracy %% required for each check to PASS.")
-    parser.add_argument("--algorithm", choices=["fixed", "sliding", "both"], default="both",
-                        help="Chunking algorithm(s) to run.")
     parser.add_argument("--plot", action="store_true",
                         help="Show additional diagnostic plots (reference waveforms and direct IOI accuracy).")
     return parser.parse_args(argv)
@@ -110,26 +108,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     print_dual_report(result, args.noise_sd, args.pass_threshold)
 
-    run_fixed = args.algorithm in ("fixed", "both")
-    run_sliding = args.algorithm in ("sliding", "both")
-    fixed_result = None
-    sliding_result = None
-
-    if run_fixed:
-        fixed_result = fixed_dual_chunks(
-            beat_iois, rhythm_iois, human_iois,
-            args.human_part, args.noise_sd, args.pass_threshold,
-            start_chunk=start_chunk,
-        )
-        print_chunk_dual_report(fixed_result, "fixed", args.pass_threshold)
-
-    if run_sliding:
-        sliding_result = sliding_dual_window(
-            beat_iois, rhythm_iois, human_iois,
-            args.human_part, args.noise_sd, args.pass_threshold,
-            start_chunk=start_chunk,
-        )
-        print_chunk_dual_report(sliding_result, "sliding", args.pass_threshold)
+    fixed_result = fixed_dual_chunks(
+        beat_iois, rhythm_iois, human_iois,
+        args.human_part, args.noise_sd, args.pass_threshold,
+        start_chunk=start_chunk,
+    )
+    print_chunk_dual_report(fixed_result, args.pass_threshold)
 
     from visualizer_dual import plot_default_graphs, plot_extra_graphs
     human_onsets_ms = silence_ms + _onsets_from_iois(human_iois)

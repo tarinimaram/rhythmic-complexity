@@ -128,6 +128,7 @@ def fixed_dual_chunks(
         "best_relational_accuracy": best_r,
         "verdict": verdict,
         "per_onset_relational": all_per_onset,
+        "start_chunk": start_chunk,
     }
 
 
@@ -216,20 +217,23 @@ def sliding_dual_window(
     }
 
 
-def print_chunk_dual_report(result: dict, algorithm: str, pass_threshold: float) -> None:
+def print_chunk_dual_report(result: dict, pass_threshold: float) -> None:
     best_idx = result["best_chunk_index"]
     direct_accs = result["chunk_direct_accuracies"]
     rel_accs = result["chunk_relational_accuracies"]
-    label = "Chunk" if algorithm == "fixed" else "Window"
+    start_chunk = result.get("start_chunk", 0)
 
-    print(f"\n=== {'Fixed Chunks' if algorithm == 'fixed' else 'Sliding Window'} — Dual-Channel ===")
-    print(f"{'#':>4}  {'Direct%':>9}  {'Relational%':>12}  {'Avg%':>7}  {'Best':>6}")
+    print("\n=== Fixed Chunks — Dual-Channel ===")
+    print(f"{'#':>4}  {'Direct%':>9}  {'Relational%':>12}  {'Avg%':>7}  {'':>6}")
     print("-" * 48)
     for i, (d, r) in enumerate(zip(direct_accs, rel_accs)):
+        if i < start_chunk:
+            print(f"{i+1:>4}  {'— NOT PLAYED —':>34}")
+            continue
         avg = (d + r) / 2.0
         marker = "← best" if i == best_idx else ""
         print(f"{i+1:>4}  {d:>8.1f}%  {r:>11.1f}%  {avg:>6.1f}%  {marker}")
     print("-" * 48)
-    print(f"Best {label} {best_idx+1}: Direct={result['best_direct_accuracy']:.1f}%  "
+    print(f"Best Chunk {best_idx+1}: Direct={result['best_direct_accuracy']:.1f}%  "
           f"Relational={result['best_relational_accuracy']:.1f}%")
     print(f"Verdict: {result['verdict']}  (threshold: {pass_threshold:.0f}%)")
