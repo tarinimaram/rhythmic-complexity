@@ -112,6 +112,7 @@ def main(argv: list[str] | None = None) -> int:
         beat_iois, rhythm_iois, human_iois,
         args.human_part, args.noise_sd, args.pass_threshold,
         start_chunk=start_chunk,
+        human_start_ms=silence_ms,
     )
     print_chunk_dual_report(fixed_result, args.pass_threshold)
 

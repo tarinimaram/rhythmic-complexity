@@ -20,6 +20,34 @@ def _chunk_size_for(human_part: str) -> int:
     return _BEAT_CHUNK_SIZE if human_part == "beat" else _RHYTHM_CHUNK_SIZE
 
 
+def _absolute_per_onset(
+    h_chunk: np.ndarray,
+    human_abs_start: float,
+    ref_onsets: np.ndarray,
+    r_start: int,
+    noise_sd: float,
+) -> list[dict]:
+    """Per-onset entries using absolute human timing vs reference grid positions."""
+    tol = 2.0 * noise_sd
+    human_abs = np.concatenate([[human_abs_start], human_abs_start + np.cumsum(h_chunk)])
+    ref_slice = ref_onsets[r_start : r_start + len(human_abs)]
+    n = min(len(human_abs), len(ref_slice))
+    per_onset = []
+    for j in range(n):
+        h, r = float(human_abs[j]), float(ref_slice[j])
+        dev = h - r
+        per_onset.append({
+            "index": j,
+            "human_onset_ms": h,
+            "actual_offset_ms": h,
+            "expected_offset_ms": r,
+            "relational_error_ms": abs(dev),
+            "tolerance_ms": tol,
+            "pass": abs(dev) <= tol,
+        })
+    return per_onset
+
+
 def _run_both_checks(
     human_chunk: np.ndarray,
     beat_iois: np.ndarray,
@@ -50,6 +78,7 @@ def fixed_dual_chunks(
     noise_sd: float,
     pass_threshold: float = 100.0,
     start_chunk: int = 0,
+    human_start_ms: float = 0.0,
 ) -> dict:
     """
     Divide the reference into 4 non-overlapping chunks and run both checks on each.
@@ -87,9 +116,16 @@ def fixed_dual_chunks(
     all_per_onset: list[dict] = []
 
     for i in range(_N_CHUNKS):
-        # Chunk 0 contributes chunk_size+1 entries (includes the sequence's first onset);
-        # all later chunks contribute chunk_size (skip the boundary note shared with prev chunk).
-        n_expected = chunk_size + (1 if i == 0 else 0)
+        # Un-played chunks own exactly chunk_size entries; the boundary note at the end
+        # belongs to the first *played* chunk, not the last un-played one.
+        # The first played chunk (i == start_chunk) therefore includes onset[0] (+1 entry).
+        # All later played chunks skip onset[0] (shared boundary with the previous chunk).
+        if i < start_chunk:
+            n_expected = chunk_size
+        elif i == start_chunk:
+            n_expected = chunk_size + 1
+        else:
+            n_expected = chunk_size
 
         # Chunks before start_chunk: human was silent here.
         if i < start_chunk:
@@ -113,18 +149,39 @@ def fixed_dual_chunks(
             continue
 
         onset_offset = float(ref_onsets[r_start])
-        d_acc, rel_acc, per_onset = _run_both_checks(
+        d_acc, rel_acc, _ = _run_both_checks(
             h_chunk, full_beat_iois, full_rhythm_iois, r_chunk, human_part, noise_sd,
             onset_offset_ms=onset_offset,
         )
         direct_accs.append(d_acc)
         relational_accs.append(rel_acc)
-        # Chunk 0: include onset[0] so the graph always starts at note 1.
-        # Later chunks: skip onset[0] (shared boundary note with the previous chunk).
-        entries: list[dict] = list(per_onset) if i == 0 else list(per_onset[1:])
+
+        # Build per-onset graph data using absolute human timing so every note,
+        # including the first one, shows its real deviation from the reference grid.
+        human_chunk_abs_start = human_start_ms + float(np.sum(human_iois[: (i - start_chunk) * chunk_size]))
+        per_onset_abs = _absolute_per_onset(h_chunk, human_chunk_abs_start, ref_onsets, r_start, noise_sd)
+
+        # First played chunk: include onset[0] — that is the human's actual first note.
+        # Later played chunks: skip onset[0] (shared boundary with the previous chunk).
+        entries: list[dict] = list(per_onset_abs) if i == start_chunk else list(per_onset_abs[1:])
         if len(entries) < n_expected:
             entries.extend([{"not_played": True}] * (n_expected - len(entries)))
         all_per_onset.extend(entries)
+
+    # Collect any human IOIs played beyond the 4-chunk reference span.
+    n_human_used = (_N_CHUNKS - start_chunk) * chunk_size
+    extra_iois = human_iois[n_human_used:]
+    if len(extra_iois) > 0:
+        one_phrase = ref_iois[:chunk_size]
+        n_phrases_needed = int(np.ceil(len(extra_iois) / chunk_size)) + 1
+        ext_ref = np.tile(one_phrase, n_phrases_needed)
+        extra_rel = check_relational(
+            extra_iois, ext_ref, ext_ref, human_part, noise_sd,
+            human_onset_offset_ms=0.0,
+        )
+        # Skip per_onset[0] (boundary at t=0); flag remaining as extra.
+        for p in extra_rel["per_onset"][1:]:
+            all_per_onset.append(dict(p, extra=True))
 
     avg_scores = [(d + r) / 2.0 for d, r in zip(direct_accs, relational_accs)]
     best_idx = int(np.argmax(avg_scores))

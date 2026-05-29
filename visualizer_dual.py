@@ -180,7 +180,8 @@ def _plot_ioi_deviations_ax(
     n = len(per_onset)
     x = np.arange(1, n + 1)
 
-    played_entries = [(i, p) for i, p in enumerate(per_onset) if not p.get("not_played")]
+    played_entries = [(i, p) for i, p in enumerate(per_onset)
+                      if not p.get("not_played") and not p.get("extra")]
     n_played = len(played_entries)
     n_pass = sum(p["pass"] for _, p in played_entries)
 
@@ -190,6 +191,17 @@ def _plot_ioi_deviations_ax(
 
     if played_x:
         ax.bar(played_x, deviations, color=colors, edgecolor="black", linewidth=0.6, zorder=3)
+
+    # Extra notes beyond the reference — drawn in purple.
+    extra_entries = [(i, p) for i, p in enumerate(per_onset) if p.get("extra")]
+    has_extra = bool(extra_entries)
+    if has_extra:
+        extra_x = [i + 1 for i, _ in extra_entries]
+        extra_devs = [p["actual_offset_ms"] - p["expected_offset_ms"] for _, p in extra_entries]
+        ax.bar(extra_x, extra_devs, color="mediumpurple", edgecolor="black", linewidth=0.6, zorder=3)
+        # Separator line between reference and extra regions.
+        sep = extra_x[0] - 0.5
+        ax.axvline(sep, color="black", linestyle="--", linewidth=1.2, zorder=4)
 
     # Shade not-played regions as contiguous spans.
     has_not_played = False
@@ -214,7 +226,8 @@ def _plot_ioi_deviations_ax(
     ax.set_xticks(x)
     ax.set_xlabel("Onset #")
     ax.set_ylabel("Deviation from reference (ms)  [+ = late, − = early]")
-    ax.set_title(f"{title}   ({n_pass}/{n_played} passed)")
+    extra_suffix = f"  +{len(extra_entries)} extra" if has_extra else ""
+    ax.set_title(f"{title}   ({n_pass}/{n_played} passed{extra_suffix})")
 
     ax.grid(True, which="major", linestyle="--", linewidth=0.8, alpha=0.7, color="dimgray", zorder=0)
     ax.grid(True, which="minor", linestyle=":", linewidth=0.4, alpha=0.5, color="darkgray", zorder=0)
@@ -227,6 +240,8 @@ def _plot_ioi_deviations_ax(
     handles = [pass_patch, fail_patch, tol_patch]
     if has_not_played:
         handles.append(mpatches.Patch(color="gray", alpha=0.3, label="Not played"))
+    if has_extra:
+        handles.append(mpatches.Patch(color="mediumpurple", label="Extra (beyond reference)"))
     ax.legend(handles=handles, fontsize=8, loc="upper right")
 
 
