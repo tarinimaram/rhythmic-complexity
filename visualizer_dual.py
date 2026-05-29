@@ -49,9 +49,9 @@ def plot_default_graphs(
     if fixed_result is not None:
         _plot_accuracy_bars(
             ax_rel,
-            fixed_result["chunk_relational_accuracies"],
+            fixed_result["chunk_direct_accuracies"],
             pass_threshold,
-            title="Fixed Chunks — Relational Accuracy",
+            title="Fixed Chunks — Direct IOI Accuracy",
         )
     else:
         ax_rel.text(0.5, 0.5, "No fixed-chunk data", ha="center", va="center",
