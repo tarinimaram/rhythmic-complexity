@@ -73,7 +73,11 @@ def fixed_dual_chunks(
     beat_iois = np.asarray(beat_iois, dtype=float)
     rhythm_iois = np.asarray(rhythm_iois, dtype=float)
     human_iois = np.asarray(human_iois, dtype=float)
-    ref_iois = beat_iois if human_part == "beat" else rhythm_iois
+
+    # Tile each reference phrase to span all N_CHUNKS so chunks 1-3 have reference data.
+    full_beat_iois = np.tile(beat_iois, _N_CHUNKS)[:_N_CHUNKS * _BEAT_CHUNK_SIZE]
+    full_rhythm_iois = np.tile(rhythm_iois, _N_CHUNKS)[:_N_CHUNKS * _RHYTHM_CHUNK_SIZE]
+    ref_iois = full_beat_iois if human_part == "beat" else full_rhythm_iois
 
     # Precompute absolute onset times for relational scoring.
     ref_onsets = np.concatenate([[0.0], np.cumsum(ref_iois)])
@@ -83,10 +87,15 @@ def fixed_dual_chunks(
     all_per_onset: list[dict] = []
 
     for i in range(_N_CHUNKS):
+        # Chunk 0 contributes chunk_size+1 entries (includes the sequence's first onset);
+        # all later chunks contribute chunk_size (skip the boundary note shared with prev chunk).
+        n_expected = chunk_size + (1 if i == 0 else 0)
+
         # Chunks before start_chunk: human was silent here.
         if i < start_chunk:
             direct_accs.append(0.0)
             relational_accs.append(0.0)
+            all_per_onset.extend([{"not_played": True}] * n_expected)
             continue
 
         # Human chunk index within their actual played notes.
@@ -100,18 +109,22 @@ def fixed_dual_chunks(
         if len(h_chunk) == 0 or len(r_chunk) == 0:
             direct_accs.append(0.0)
             relational_accs.append(0.0)
+            all_per_onset.extend([{"not_played": True}] * n_expected)
             continue
 
         onset_offset = float(ref_onsets[r_start])
         d_acc, rel_acc, per_onset = _run_both_checks(
-            h_chunk, beat_iois, rhythm_iois, r_chunk, human_part, noise_sd,
+            h_chunk, full_beat_iois, full_rhythm_iois, r_chunk, human_part, noise_sd,
             onset_offset_ms=onset_offset,
         )
         direct_accs.append(d_acc)
         relational_accs.append(rel_acc)
-        # onset[0] is the entry onset before any IOI of this chunk; skip it so
-        # each entry in all_per_onset maps 1-to-1 with an IOI endpoint.
-        all_per_onset.extend(per_onset[1:])
+        # Chunk 0: include onset[0] so the graph always starts at note 1.
+        # Later chunks: skip onset[0] (shared boundary note with the previous chunk).
+        entries: list[dict] = list(per_onset) if i == 0 else list(per_onset[1:])
+        if len(entries) < n_expected:
+            entries.extend([{"not_played": True}] * (n_expected - len(entries)))
+        all_per_onset.extend(entries)
 
     avg_scores = [(d + r) / 2.0 for d, r in zip(direct_accs, relational_accs)]
     best_idx = int(np.argmax(avg_scores))

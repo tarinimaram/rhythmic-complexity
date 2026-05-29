@@ -178,13 +178,33 @@ def _plot_ioi_deviations_ax(
 ) -> None:
     tol = 2.0 * noise_sd
     n = len(per_onset)
-    deviations = np.array([p["actual_offset_ms"] - p["expected_offset_ms"] for p in per_onset])
-    passed = np.array([p["pass"] for p in per_onset])
-    n_pass = int(np.sum(passed))
-
     x = np.arange(1, n + 1)
-    colors = ["forestgreen" if p else "tomato" for p in passed]
-    ax.bar(x, deviations, color=colors, edgecolor="black", linewidth=0.6, zorder=3)
+
+    played_entries = [(i, p) for i, p in enumerate(per_onset) if not p.get("not_played")]
+    n_played = len(played_entries)
+    n_pass = sum(p["pass"] for _, p in played_entries)
+
+    played_x = [i + 1 for i, _ in played_entries]
+    deviations = [p["actual_offset_ms"] - p["expected_offset_ms"] for _, p in played_entries]
+    colors = ["forestgreen" if p["pass"] else "tomato" for _, p in played_entries]
+
+    if played_x:
+        ax.bar(played_x, deviations, color=colors, edgecolor="black", linewidth=0.6, zorder=3)
+
+    # Shade not-played regions as contiguous spans.
+    has_not_played = False
+    run_start = None
+    for i, p in enumerate(per_onset):
+        if p.get("not_played"):
+            has_not_played = True
+            if run_start is None:
+                run_start = i + 0.5
+        else:
+            if run_start is not None:
+                ax.axvspan(run_start, i + 0.5, alpha=0.10, color="gray", zorder=0)
+                run_start = None
+    if run_start is not None:
+        ax.axvspan(run_start, n + 0.5, alpha=0.10, color="gray", zorder=0)
 
     ax.axhspan(-tol, tol, alpha=0.12, color="limegreen", zorder=1)
     ax.axhline(tol, color="green", linestyle="--", linewidth=1.2, zorder=2)
@@ -194,7 +214,7 @@ def _plot_ioi_deviations_ax(
     ax.set_xticks(x)
     ax.set_xlabel("Onset #")
     ax.set_ylabel("Deviation from reference (ms)  [+ = late, − = early]")
-    ax.set_title(f"{title}   ({n_pass}/{n} passed)")
+    ax.set_title(f"{title}   ({n_pass}/{n_played} passed)")
 
     ax.grid(True, which="major", linestyle="--", linewidth=0.8, alpha=0.7, color="dimgray", zorder=0)
     ax.grid(True, which="minor", linestyle=":", linewidth=0.4, alpha=0.5, color="darkgray", zorder=0)
@@ -204,7 +224,10 @@ def _plot_ioi_deviations_ax(
     pass_patch = mpatches.Patch(color="forestgreen", label="PASS")
     fail_patch = mpatches.Patch(color="tomato", label="FAIL")
     tol_patch = mpatches.Patch(color="limegreen", alpha=0.4, label=f"Tolerance ±{tol:.0f} ms")
-    ax.legend(handles=[pass_patch, fail_patch, tol_patch], fontsize=8, loc="upper right")
+    handles = [pass_patch, fail_patch, tol_patch]
+    if has_not_played:
+        handles.append(mpatches.Patch(color="gray", alpha=0.3, label="Not played"))
+    ax.legend(handles=handles, fontsize=8, loc="upper right")
 
 
 def _plot_accuracy_bars(

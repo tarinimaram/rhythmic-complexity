@@ -1,6 +1,6 @@
 python main_dual.py \
     --reference "recordings/Recordings (rhythm + 12-8 beat R1).wav" \
-    --test "/Users/tarinimaram/Downloads/Sequence_Phase3_5-12/Phase3_Test_BeatAlone_R1_5of5.wav" \
+    --test "/Users/tarinimaram/rhythmic complexity project/Sequence_Phase3_5-12/Phase3_Test_BeatAlone_R1_1of5.wav" \
     --human_part rhythm \
     --beat_iois 600,600,600,600,600,600,600,600,600,600,600,600,600,600,600,600 \
     --rhythm_iois 400,400,200,400,400,400,200,400,400,200,400,400,400,200,400,400,200,400,400,400,200,400,400,200,400,400,400,200 \
