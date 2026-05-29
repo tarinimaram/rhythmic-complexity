@@ -18,10 +18,7 @@ from matplotlib.gridspec import GridSpec
 from matplotlib.ticker import MultipleLocator, FuncFormatter
 
 
-def plot_dual_all(
-    beat_array: np.ndarray,
-    rhythm_array: np.ndarray,
-    sample_rate: int,
+def plot_default_graphs(
     human_onsets_ms: np.ndarray,
     beat_ref_onsets_ms: np.ndarray,
     rhythm_ref_onsets_ms: np.ndarray,
@@ -31,63 +28,72 @@ def plot_dual_all(
     noise_sd: float = 30.0,
 ) -> None:
     """
-    Display the full diagnostic grid.
-
-    Parameters
-    ----------
-    beat_array            : left-channel audio samples
-    rhythm_array          : right-channel audio samples
-    sample_rate           : audio sample rate (Hz)
-    human_onsets_ms       : human onset times in ms
-    beat_ref_onsets_ms    : reference beat onset times in ms
-    rhythm_ref_onsets_ms  : reference rhythm onset times in ms
-    fixed_result          : output dict from fixed_dual_chunks (for chunk rows)
-    pass_threshold        : threshold used for PASS/FAIL colouring
-    per_onset_relational  : per-onset data from fixed_dual_chunks for the
-                            deviation chart; if provided a third row is added
-    noise_sd              : tolerance SD in ms (used for the deviation chart)
+    Display the three default diagnostic graphs:
+      - Onset Alignment
+      - Relational Accuracy
+      - Per-Onset Relational Deviation (if data available)
     """
     has_ioi = bool(per_onset_relational)
+    n_rows = 2 + (1 if has_ioi else 0)
 
-    if has_ioi:
-        fig = plt.figure(figsize=(14, 13))
-        gs = GridSpec(3, 2, figure=fig, hspace=0.45, wspace=0.3)
-        ax00 = fig.add_subplot(gs[0, 0])
-        ax01 = fig.add_subplot(gs[0, 1])
-        ax10 = fig.add_subplot(gs[1, 0])
-        ax11 = fig.add_subplot(gs[1, 1])
-        ax_ioi = fig.add_subplot(gs[2, :])
-    else:
-        fig, axes = plt.subplots(2, 2, figsize=(14, 9))
-        ax00, ax01 = axes[0, 0], axes[0, 1]
-        ax10, ax11 = axes[1, 0], axes[1, 1]
+    fig = plt.figure(figsize=(12, 4 * n_rows))
+    gs = GridSpec(n_rows, 1, figure=fig, hspace=0.55)
+
+    ax_align = fig.add_subplot(gs[0, 0])
+    ax_rel = fig.add_subplot(gs[1, 0])
 
     fig.suptitle("Dual-Channel Rhythm Analysis", fontsize=14)
 
-    _plot_overlaid_waveforms(ax00, beat_array, rhythm_array, sample_rate)
-    _plot_onset_grid(ax01, human_onsets_ms, beat_ref_onsets_ms, rhythm_ref_onsets_ms)
+    _plot_onset_grid(ax_align, human_onsets_ms, beat_ref_onsets_ms, rhythm_ref_onsets_ms)
 
     if fixed_result is not None:
         _plot_accuracy_bars(
-            ax10,
-            fixed_result["chunk_direct_accuracies"],
-            pass_threshold,
-            title="Fixed Chunks — Direct IOI Accuracy",
-        )
-        _plot_accuracy_bars(
-            ax11,
+            ax_rel,
             fixed_result["chunk_relational_accuracies"],
             pass_threshold,
             title="Fixed Chunks — Relational Accuracy",
         )
     else:
-        for ax in (ax10, ax11):
-            ax.text(0.5, 0.5, "No fixed-chunk data", ha="center", va="center",
-                    transform=ax.transAxes, color="gray")
-            ax.set_axis_off()
+        ax_rel.text(0.5, 0.5, "No fixed-chunk data", ha="center", va="center",
+                    transform=ax_rel.transAxes, color="gray")
+        ax_rel.set_axis_off()
 
     if has_ioi:
-        _plot_ioi_deviations_ax(ax_ioi, per_onset_relational, noise_sd)
+        ax_dev = fig.add_subplot(gs[2, 0])
+        _plot_ioi_deviations_ax(ax_dev, per_onset_relational, noise_sd)
+
+    plt.tight_layout()
+    plt.show()
+
+
+def plot_extra_graphs(
+    beat_array: np.ndarray,
+    rhythm_array: np.ndarray,
+    sample_rate: int,
+    fixed_result: dict | None = None,
+    pass_threshold: float = 100.0,
+) -> None:
+    """
+    Display additional diagnostic graphs (shown only with --plot flag):
+      - Reference Channels Overlaid (waveforms)
+      - Fixed Chunks — Direct IOI Accuracy
+    """
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+    fig.suptitle("Additional Diagnostics", fontsize=14)
+
+    _plot_overlaid_waveforms(axes[0], beat_array, rhythm_array, sample_rate)
+
+    if fixed_result is not None:
+        _plot_accuracy_bars(
+            axes[1],
+            fixed_result["chunk_direct_accuracies"],
+            pass_threshold,
+            title="Fixed Chunks — Direct IOI Accuracy",
+        )
+    else:
+        axes[1].text(0.5, 0.5, "No fixed-chunk data", ha="center", va="center",
+                     transform=axes[1].transAxes, color="gray")
+        axes[1].set_axis_off()
 
     plt.tight_layout()
     plt.show()

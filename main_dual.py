@@ -40,7 +40,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--algorithm", choices=["fixed", "sliding", "both"], default="both",
                         help="Chunking algorithm(s) to run.")
     parser.add_argument("--plot", action="store_true",
-                        help="Show all visualizations after analysis.")
+                        help="Show additional diagnostic plots (reference waveforms and direct IOI accuracy).")
     return parser.parse_args(argv)
 
 
@@ -76,7 +76,7 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"\nSplitting stereo reference: {args.reference}")
     try:
-        beat_array, rhythm_array, sr = split_channels(args.reference, plot=args.plot)
+        beat_array, rhythm_array, sr = split_channels(args.reference, plot=False)
     except Exception as exc:
         print(f"ERROR splitting channels: {exc}")
         return 1
@@ -131,23 +131,28 @@ def main(argv: list[str] | None = None) -> int:
         )
         print_chunk_dual_report(sliding_result, "sliding", args.pass_threshold)
 
+    from visualizer_dual import plot_default_graphs, plot_extra_graphs
+    human_onsets_ms = silence_ms + _onsets_from_iois(human_iois)
+    beat_ref_onsets_ms = _onsets_from_iois(beat_iois)
+    rhythm_ref_onsets_ms = _onsets_from_iois(rhythm_iois)
+    per_onset = fixed_result.get("per_onset_relational") if fixed_result else None
+    plot_default_graphs(
+        human_onsets_ms=human_onsets_ms,
+        beat_ref_onsets_ms=beat_ref_onsets_ms,
+        rhythm_ref_onsets_ms=rhythm_ref_onsets_ms,
+        fixed_result=fixed_result,
+        pass_threshold=args.pass_threshold,
+        per_onset_relational=per_onset,
+        noise_sd=args.noise_sd,
+    )
+
     if args.plot:
-        from visualizer_dual import plot_dual_all
-        human_onsets_ms = silence_ms + _onsets_from_iois(human_iois)
-        beat_ref_onsets_ms = _onsets_from_iois(beat_iois)
-        rhythm_ref_onsets_ms = _onsets_from_iois(rhythm_iois)
-        per_onset = fixed_result.get("per_onset_relational") if fixed_result else None
-        plot_dual_all(
+        plot_extra_graphs(
             beat_array=beat_array,
             rhythm_array=rhythm_array,
             sample_rate=sr,
-            human_onsets_ms=human_onsets_ms,
-            beat_ref_onsets_ms=beat_ref_onsets_ms,
-            rhythm_ref_onsets_ms=rhythm_ref_onsets_ms,
             fixed_result=fixed_result,
             pass_threshold=args.pass_threshold,
-            per_onset_relational=per_onset,
-            noise_sd=args.noise_sd,
         )
 
     overall = result["overall_pass"]
