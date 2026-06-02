@@ -105,6 +105,7 @@ def main(argv: list[str] | None = None) -> int:
         human_part=args.human_part,
         noise_sd=args.noise_sd,
         pass_threshold=args.pass_threshold,
+        human_start_ms=silence_ms,
     )
     print_dual_report(result, args.noise_sd, args.pass_threshold)
 

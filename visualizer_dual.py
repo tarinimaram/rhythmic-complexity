@@ -181,7 +181,8 @@ def _plot_ioi_deviations_ax(
     x = np.arange(1, n + 1)
 
     played_entries = [(i, p) for i, p in enumerate(per_onset)
-                      if not p.get("not_played") and not p.get("extra")]
+                      if not p.get("not_played") and not p.get("extra")
+                      and not p.get("discarded")]
     n_played = len(played_entries)
     n_pass = sum(p["pass"] for _, p in played_entries)
 
@@ -199,24 +200,33 @@ def _plot_ioi_deviations_ax(
         extra_x = [i + 1 for i, _ in extra_entries]
         extra_devs = [p["actual_offset_ms"] - p["expected_offset_ms"] for _, p in extra_entries]
         ax.bar(extra_x, extra_devs, color="mediumpurple", edgecolor="black", linewidth=0.6, zorder=3)
-        # Separator line between reference and extra regions.
         sep = extra_x[0] - 0.5
         ax.axvline(sep, color="black", linestyle="--", linewidth=1.2, zorder=4)
 
-    # Shade not-played regions as contiguous spans.
+    # Shade not-played and discarded regions as contiguous spans.
     has_not_played = False
+    has_discarded = False
     run_start = None
+    run_kind = None  # "not_played" or "discarded"
     for i, p in enumerate(per_onset):
-        if p.get("not_played"):
-            has_not_played = True
+        kind = "not_played" if p.get("not_played") else ("discarded" if p.get("discarded") else None)
+        if kind is not None:
+            if kind == "not_played":
+                has_not_played = True
+            else:
+                has_discarded = True
             if run_start is None:
                 run_start = i + 0.5
+                run_kind = kind
         else:
             if run_start is not None:
-                ax.axvspan(run_start, i + 0.5, alpha=0.10, color="gray", zorder=0)
+                color = "gray" if run_kind == "not_played" else "darkorange"
+                ax.axvspan(run_start, i + 0.5, alpha=0.18, color=color, zorder=0)
                 run_start = None
+                run_kind = None
     if run_start is not None:
-        ax.axvspan(run_start, n + 0.5, alpha=0.10, color="gray", zorder=0)
+        color = "gray" if run_kind == "not_played" else "darkorange"
+        ax.axvspan(run_start, n + 0.5, alpha=0.18, color=color, zorder=0)
 
     ax.axhspan(-tol, tol, alpha=0.12, color="limegreen", zorder=1)
     ax.axhline(tol, color="green", linestyle="--", linewidth=1.2, zorder=2)
@@ -240,6 +250,8 @@ def _plot_ioi_deviations_ax(
     handles = [pass_patch, fail_patch, tol_patch]
     if has_not_played:
         handles.append(mpatches.Patch(color="gray", alpha=0.3, label="Not played"))
+    if has_discarded:
+        handles.append(mpatches.Patch(color="darkorange", alpha=0.3, label="Discarded (extra/missing note)"))
     if has_extra:
         handles.append(mpatches.Patch(color="mediumpurple", label="Extra (beyond reference)"))
     ax.legend(handles=handles, fontsize=8, loc="upper right")
@@ -247,13 +259,32 @@ def _plot_ioi_deviations_ax(
 
 def _plot_accuracy_bars(
     ax: plt.Axes,
-    accuracies: list[float],
+    accuracies: list,
     pass_threshold: float,
     title: str,
 ) -> None:
     x = np.arange(len(accuracies))
-    colors = ["forestgreen" if a >= pass_threshold else "tomato" for a in accuracies]
-    ax.bar(x, accuracies, color=colors, edgecolor="black", linewidth=0.6)
+    has_discarded = any(a is None for a in accuracies)
+
+    bar_heights = [a if a is not None else 0.0 for a in accuracies]
+    colors = []
+    for a in accuracies:
+        if a is None:
+            colors.append("lightgray")
+        elif a >= pass_threshold:
+            colors.append("forestgreen")
+        else:
+            colors.append("tomato")
+
+    bars = ax.bar(x, bar_heights, color=colors, edgecolor="black", linewidth=0.6)
+
+    # Hatch discarded bars and add a label inside them.
+    for bar, a in zip(bars, accuracies):
+        if a is None:
+            bar.set_hatch("//")
+            cx = bar.get_x() + bar.get_width() / 2
+            ax.text(cx, 5, "N/A", ha="center", va="bottom", fontsize=7, color="gray")
+
     ax.axhline(pass_threshold, color="black", linestyle="--", linewidth=1,
                label=f"Threshold {pass_threshold:.0f}%")
     ax.set_xticks(x)
@@ -263,4 +294,7 @@ def _plot_accuracy_bars(
     ax.set_title(title)
     pass_patch = mpatches.Patch(color="forestgreen", label="PASS")
     fail_patch = mpatches.Patch(color="tomato", label="FAIL")
-    ax.legend(handles=[pass_patch, fail_patch], fontsize=8, loc="lower right")
+    handles = [pass_patch, fail_patch]
+    if has_discarded:
+        handles.append(mpatches.Patch(facecolor="lightgray", hatch="//", label="Discarded"))
+    ax.legend(handles=handles, fontsize=8, loc="lower right")

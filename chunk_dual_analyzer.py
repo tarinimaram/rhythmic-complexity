@@ -1,15 +1,24 @@
 """
 chunk_dual_analyzer.py — Chunked Dual-Channel Accuracy
 
-Applies both direct IOI and cross-channel relational checks across
-two chunking strategies: fixed 4×N chunks and a sliding window (size N, step 1),
-where N=4 when the human performed the beat and N=7 for the rhythm.
+Applies onset-deviation scoring across 4 fixed chunks.  Each chunk is
+assigned human notes by timing (nearest reference onset), so an extra or
+missing note in one chunk does not corrupt subsequent chunks.
+
+Rules:
+  - Chunk i gets the human notes whose nearest reference onset lives in
+    chunk i (greedy nearest-neighbor IOI assignment).
+  - If the human note count in a chunk != expected (chunk_size): the chunk
+    is DISCARDED — scored as None, shown as gray in the plot.
+  - Discarded chunks do not affect the evaluation of later chunks.
+  - Within a valid chunk each human onset is matched to the nearest
+    (unassigned) reference onset ("before" or "after") to determine its
+    deviation and pass/fail.
 """
 
 from __future__ import annotations
 
 import numpy as np
-from dual_channel_analyzer import check_direct_ioi, check_relational
 
 _BEAT_CHUNK_SIZE = 4
 _RHYTHM_CHUNK_SIZE = 7
@@ -21,26 +30,29 @@ def _chunk_size_for(human_part: str) -> int:
 
 
 
-def _run_both_checks(
-    human_chunk: np.ndarray,
-    beat_iois: np.ndarray,
-    rhythm_iois: np.ndarray,
-    ref_chunk: np.ndarray,
-    human_part: str,
-    noise_sd: float,
-    onset_offset_ms: float = 0.0,
-) -> tuple[float, float, list[dict]]:
-    """Return (direct_accuracy_pct, relational_accuracy_pct, per_onset) for one chunk."""
-    direct = check_direct_ioi(human_chunk, ref_chunk, noise_sd)
-    relational = check_relational(
-        human_chunk, beat_iois, rhythm_iois, human_part, noise_sd,
-        human_onset_offset_ms=onset_offset_ms,
-    )
-    return direct["accuracy_pct"], relational["accuracy_pct"], relational["per_onset"]
+
+def _match_nearest_greedy(
+    human_onsets: np.ndarray,
+    ref_onsets: np.ndarray,
+) -> list[tuple[int, int]]:
+    """
+    Greedy nearest-neighbor matching: iterate human onsets in order, each
+    time assigning it to the nearest still-available reference onset.
+    Returns list of (human_idx, ref_idx) pairs.
+    Assumes len(human_onsets) == len(ref_onsets).
+    """
+    available = list(range(len(ref_onsets)))
+    pairs: list[tuple[int, int]] = []
+    for h_idx in range(len(human_onsets)):
+        h = human_onsets[h_idx]
+        best = min(available, key=lambda r: abs(h - ref_onsets[r]))
+        pairs.append((h_idx, best))
+        available.remove(best)
+    return pairs
 
 
 # ---------------------------------------------------------------------------
-# Algorithm 1 — Fixed 4×7 Chunks
+# Algorithm 1 — Fixed 4×N Chunks (timing-based assignment)
 # ---------------------------------------------------------------------------
 
 def fixed_dual_chunks(
@@ -54,129 +66,137 @@ def fixed_dual_chunks(
     human_start_ms: float = 0.0,
 ) -> dict:
     """
-    Divide the reference into 4 non-overlapping chunks and run both checks on each.
-    Chunk size is 4 for beat (4 beats per phrase) or 7 for rhythm.
+    Divide the reference into 4 non-overlapping chunks and evaluate each one.
+    Human notes are assigned to chunks by timing (nearest reference onset),
+    so an extra or missing note in one chunk does not shift note assignments
+    for subsequent chunks.
 
-    start_chunk indicates which reference chunk the human's first note belongs to.
-    Chunks before start_chunk are scored 0% (human was silent); from start_chunk
-    onward the human's notes are compared against the corresponding reference chunk.
+    A chunk is DISCARDED (scored None) when the number of human notes
+    assigned to it differs from the expected chunk_size.
 
     Returns
     -------
     dict:
-        chunk_direct_accuracies     : list[float]
-        chunk_relational_accuracies : list[float]
-        best_chunk_index            : int  (0-based)
+        chunk_direct_accuracies     : list[float | None]   (None = discarded)
+        chunk_relational_accuracies : list[float | None]
+        best_chunk_index            : int  (0-based, best non-discarded)
         best_direct_accuracy        : float
         best_relational_accuracy    : float
         verdict                     : "PASS" | "FAIL"
+        per_onset_relational        : list[dict]
+        start_chunk                 : int
     """
     chunk_size = _chunk_size_for(human_part)
     beat_iois = np.asarray(beat_iois, dtype=float)
     rhythm_iois = np.asarray(rhythm_iois, dtype=float)
     human_iois = np.asarray(human_iois, dtype=float)
 
-    # Tile each reference phrase to span all N_CHUNKS so chunks 1-3 have reference data.
-    full_beat_iois = np.tile(beat_iois, _N_CHUNKS)[:_N_CHUNKS * _BEAT_CHUNK_SIZE]
-    full_rhythm_iois = np.tile(rhythm_iois, _N_CHUNKS)[:_N_CHUNKS * _RHYTHM_CHUNK_SIZE]
+    # Tile reference to span all N_CHUNKS.
+    full_beat_iois = np.tile(beat_iois, _N_CHUNKS)[: _N_CHUNKS * _BEAT_CHUNK_SIZE]
+    full_rhythm_iois = np.tile(rhythm_iois, _N_CHUNKS)[: _N_CHUNKS * _RHYTHM_CHUNK_SIZE]
     ref_iois = full_beat_iois if human_part == "beat" else full_rhythm_iois
 
-    # Precompute absolute onset times for relational scoring.
+    # Absolute onset times.
     ref_onsets = np.concatenate([[0.0], np.cumsum(ref_iois)])
+    human_onsets_abs = human_start_ms + np.concatenate([[0.0], np.cumsum(human_iois)])
 
-    direct_accs: list[float] = []
-    relational_accs: list[float] = []
+    # Start onsets of each IOI (all but the very last onset point).
+    ioi_starts = human_onsets_abs[:-1] if len(human_onsets_abs) > 1 else np.array([], dtype=float)
+
+    tol = 2.0 * noise_sd
+
+    direct_accs: list[float | None] = []
+    relational_accs: list[float | None] = []
     all_per_onset: list[dict] = []
 
     for i in range(_N_CHUNKS):
-        # Un-played chunks own exactly chunk_size entries; the boundary note at the end
-        # belongs to the first *played* chunk, not the last un-played one.
-        # The first played chunk (i == start_chunk) therefore includes onset[0] (+1 entry).
-        # All later played chunks skip onset[0] (shared boundary with the previous chunk).
-        if i < start_chunk:
-            n_expected = chunk_size
-        elif i == start_chunk:
-            n_expected = chunk_size + 1
-        else:
-            n_expected = chunk_size
+        chunk_ref_start = ref_onsets[i * chunk_size]
+        chunk_ref_end = ref_onsets[(i + 1) * chunk_size]
 
-        # Chunks before start_chunk: human was silent here.
         if i < start_chunk:
+            # Human was silent here.
             direct_accs.append(0.0)
             relational_accs.append(0.0)
-            all_per_onset.extend([{"not_played": True}] * n_expected)
+            all_per_onset.extend([{"not_played": True}] * chunk_size)
             continue
 
-        # Human chunk index within their actual played notes.
-        human_chunk_idx = i - start_chunk
-        h_start = human_chunk_idx * chunk_size
-        h_chunk = human_iois[h_start : h_start + chunk_size]
+        # Assign IOIs to this chunk by time window.
+        # A note belongs to chunk i if its absolute onset is in
+        #   [chunk_ref_start - tol, chunk_ref_end - tol)
+        # The -tol shift ensures notes within the tolerance band of the
+        # chunk boundary are assigned to the chunk they're closest to
+        # rather than spilling into the adjacent chunk.
+        in_window = np.where(
+            (ioi_starts >= chunk_ref_start - tol) & (ioi_starts < chunk_ref_end - tol)
+        )[0]
+        actual_count = len(in_window)
 
-        r_start = i * chunk_size
-        r_chunk = ref_iois[r_start : r_start + chunk_size]
-
-        if len(h_chunk) == 0 or len(r_chunk) == 0:
-            direct_accs.append(0.0)
-            relational_accs.append(0.0)
-            all_per_onset.extend([{"not_played": True}] * n_expected)
+        if actual_count != chunk_size:
+            # Extra or missing note — discard this chunk entirely.
+            direct_accs.append(None)
+            relational_accs.append(None)
+            # Fill per_onset with discarded markers so x-axis positions stay consistent.
+            n_markers = max(actual_count, chunk_size)
+            all_per_onset.extend([{"discarded": True}] * n_markers)
             continue
 
-        onset_offset = float(ref_onsets[r_start])
-        d_acc, rel_acc, _ = _run_both_checks(
-            h_chunk, full_beat_iois, full_rhythm_iois, r_chunk, human_part, noise_sd,
-            onset_offset_ms=onset_offset,
-        )
-        direct_accs.append(d_acc)
-        relational_accs.append(rel_acc)
+        # Reference start onsets for this chunk.
+        r_onsets_chunk = ref_onsets[i * chunk_size : (i + 1) * chunk_size]
+        h_onsets_chunk = ioi_starts[in_window]
 
-        # Build per-onset graph data using IOI deviations so pass/fail matches the
-        # direct IOI accuracy bars exactly.  The first note of the first played chunk
-        # gets the entry-timing deviation (human_start_ms vs reference grid); every
-        # subsequent note gets its signed IOI deviation (human_ioi − ref_ioi).
-        tol = 2.0 * noise_sd
+        # Match each human onset to the nearest (unassigned) reference onset.
+        pairs = _match_nearest_greedy(h_onsets_chunk, r_onsets_chunk)
+
         entries: list[dict] = []
-        if i == start_chunk:
-            dev = human_start_ms - float(ref_onsets[r_start])
+        n_pass = 0
+        for h_idx, r_idx in pairs:
+            h = float(h_onsets_chunk[h_idx])
+            r = float(r_onsets_chunk[r_idx])
+            dev = h - r
+            passed = abs(dev) <= tol
+            if passed:
+                n_pass += 1
             entries.append({
-                "actual_offset_ms": human_start_ms,
-                "expected_offset_ms": float(ref_onsets[r_start]),
-                "pass": abs(dev) <= tol,
+                "actual_offset_ms": h,
+                "expected_offset_ms": r,
+                "pass": passed,
             })
-        for j in range(min(len(h_chunk), len(r_chunk))):
-            h_ioi, r_ioi = float(h_chunk[j]), float(r_chunk[j])
-            entries.append({
-                "actual_offset_ms": h_ioi,
-                "expected_offset_ms": r_ioi,
-                "pass": abs(h_ioi - r_ioi) <= tol,
-            })
-        if len(entries) < n_expected:
-            entries.extend([{"not_played": True}] * (n_expected - len(entries)))
+
+        accuracy = (n_pass / chunk_size) * 100.0
+        direct_accs.append(accuracy)
+        relational_accs.append(accuracy)
         all_per_onset.extend(entries)
 
-    # Collect any human IOIs played beyond the 4-chunk reference span.
-    n_human_used = (_N_CHUNKS - start_chunk) * chunk_size
-    extra_iois = human_iois[n_human_used:]
-    if len(extra_iois) > 0:
-        tol = 2.0 * noise_sd
-        one_phrase = ref_iois[:chunk_size]
-        n_phrases_needed = int(np.ceil(len(extra_iois) / chunk_size)) + 1
-        ext_ref = np.tile(one_phrase, n_phrases_needed)
-        for j, h_ioi in enumerate(extra_iois):
-            r_ioi = float(ext_ref[j])
-            h_ioi = float(h_ioi)
+    # Any human notes that fell beyond the last reference chunk boundary.
+    last_ref_onset = ref_onsets[_N_CHUNKS * chunk_size]
+    extra_ioi_indices = [j for j, t in enumerate(ioi_starts) if t >= last_ref_onset]
+    if extra_ioi_indices:
+        r_phrase = ref_onsets[:chunk_size]
+        for j in extra_ioi_indices:
+            h = float(ioi_starts[j])
+            r = float(r_phrase[j % chunk_size])
             all_per_onset.append({
-                "actual_offset_ms": h_ioi,
-                "expected_offset_ms": r_ioi,
-                "pass": abs(h_ioi - r_ioi) <= tol,
+                "actual_offset_ms": h,
+                "expected_offset_ms": r,
+                "pass": abs(h - r) <= tol,
                 "extra": True,
             })
 
-    avg_scores = [(d + r) / 2.0 for d, r in zip(direct_accs, relational_accs)]
-    best_idx = int(np.argmax(avg_scores))
+    # Best chunk: highest accuracy among non-discarded, non-silent chunks.
+    valid = [
+        (i, d)
+        for i, (d, r) in enumerate(zip(direct_accs, relational_accs))
+        if d is not None and i >= start_chunk
+    ]
+    if not valid:
+        best_idx = start_chunk
+        best_d = best_r = 0.0
+    else:
+        best_idx, best_d = max(valid, key=lambda x: x[1])
+        best_r = relational_accs[best_idx]  # type: ignore[assignment]
 
-    best_d = direct_accs[best_idx]
-    best_r = relational_accs[best_idx]
-    verdict = "PASS" if (best_d >= pass_threshold and best_r >= pass_threshold) else "FAIL"
+    verdict = "PASS" if (best_d is not None and best_d >= pass_threshold
+                         and best_r is not None and best_r >= pass_threshold) else "FAIL"
 
     return {
         "chunk_direct_accuracies": direct_accs,
@@ -191,7 +211,7 @@ def fixed_dual_chunks(
 
 
 # ---------------------------------------------------------------------------
-# Algorithm 2 — Sliding Window (size N, step 1)
+# Algorithm 2 — Sliding Window (size N, step 1) — unchanged
 # ---------------------------------------------------------------------------
 
 def sliding_dual_window(
@@ -205,19 +225,11 @@ def sliding_dual_window(
 ) -> dict:
     """
     Slide an N-IOI window across the human array, where N=4 for beat and N=7
-    for rhythm. The reference window is anchored at start_chunk so the human's
+    for rhythm.  The reference window is anchored at start_chunk so the human's
     notes are compared against the correct section of the reference.
-
-    Returns
-    -------
-    dict:
-        chunk_direct_accuracies     : list[float]  (one per window)
-        chunk_relational_accuracies : list[float]
-        best_chunk_index            : int  (start index of best window)
-        best_direct_accuracy        : float
-        best_relational_accuracy    : float
-        verdict                     : "PASS" | "FAIL"
     """
+    from dual_channel_analyzer import check_direct_ioi, check_relational
+
     chunk_size = _chunk_size_for(human_part)
     beat_iois = np.asarray(beat_iois, dtype=float)
     rhythm_iois = np.asarray(rhythm_iois, dtype=float)
@@ -226,7 +238,6 @@ def sliding_dual_window(
 
     ref_onsets = np.concatenate([[0.0], np.cumsum(ref_iois)])
 
-    # Align the reference window to where the human started playing.
     ref_start_idx = start_chunk * chunk_size
     n_ref_available = max(0, len(ref_iois) - ref_start_idx)
     n = min(len(human_iois), n_ref_available)
@@ -241,12 +252,13 @@ def sliding_dual_window(
         r_chunk = ref_iois[ref_i : ref_i + chunk_size]
         onset_offset = float(ref_onsets[ref_i])
 
-        d_acc, rel_acc, _ = _run_both_checks(
-            h_chunk, beat_iois, rhythm_iois, r_chunk, human_part, noise_sd,
-            onset_offset_ms=onset_offset,
+        direct = check_direct_ioi(h_chunk, r_chunk, noise_sd)
+        relational = check_relational(
+            h_chunk, beat_iois, rhythm_iois, human_part, noise_sd,
+            human_onset_offset_ms=onset_offset,
         )
-        direct_accs.append(d_acc)
-        relational_accs.append(rel_acc)
+        direct_accs.append(direct["accuracy_pct"])
+        relational_accs.append(relational["accuracy_pct"])
 
     if not direct_accs:
         return {
@@ -260,7 +272,6 @@ def sliding_dual_window(
 
     avg_scores = [(d + r) / 2.0 for d, r in zip(direct_accs, relational_accs)]
     best_idx = int(np.argmax(avg_scores))
-
     best_d = direct_accs[best_idx]
     best_r = relational_accs[best_idx]
     verdict = "PASS" if (best_d >= pass_threshold and best_r >= pass_threshold) else "FAIL"
@@ -281,17 +292,21 @@ def print_chunk_dual_report(result: dict, pass_threshold: float) -> None:
     rel_accs = result["chunk_relational_accuracies"]
     start_chunk = result.get("start_chunk", 0)
 
-    print("\n=== Fixed Chunks — Dual-Channel ===")
-    print(f"{'#':>4}  {'Direct%':>9}  {'Relational%':>12}  {'Avg%':>7}  {'':>6}")
-    print("-" * 48)
+    print("\n=== Fixed Chunks — Onset-Deviation Scoring ===")
+    print(f"{'#':>4}  {'Direct%':>9}  {'Relational%':>12}  {'Avg%':>7}  {'':>10}")
+    print("-" * 52)
     for i, (d, r) in enumerate(zip(direct_accs, rel_accs)):
         if i < start_chunk:
-            print(f"{i+1:>4}  {'— NOT PLAYED —':>34}")
+            print(f"{i+1:>4}  {'— NOT PLAYED —':>38}")
+            continue
+        if d is None:
+            print(f"{i+1:>4}  {'— DISCARDED (extra/missing note) —':>38}")
             continue
         avg = (d + r) / 2.0
         marker = "← best" if i == best_idx else ""
         print(f"{i+1:>4}  {d:>8.1f}%  {r:>11.1f}%  {avg:>6.1f}%  {marker}")
-    print("-" * 48)
-    print(f"Best Chunk {best_idx+1}: Direct={result['best_direct_accuracy']:.1f}%  "
-          f"Relational={result['best_relational_accuracy']:.1f}%")
+    print("-" * 52)
+    bd = result["best_direct_accuracy"]
+    br = result["best_relational_accuracy"]
+    print(f"Best Chunk {best_idx+1}: Direct={bd:.1f}%  Relational={br:.1f}%")
     print(f"Verdict: {result['verdict']}  (threshold: {pass_threshold:.0f}%)")
