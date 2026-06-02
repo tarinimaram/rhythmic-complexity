@@ -1,12 +1,16 @@
 """
 visualizer_dual.py — Dual-Channel Visualizations
 
-2×2 grid (+ optional full-width bottom row):
-  Top-left    : both reference channel waveforms overlaid
-  Top-right   : human onset times vs. both reference onset grids
-  Mid-left    : per-chunk direct IOI accuracy bar chart
-  Mid-right   : per-chunk relational accuracy bar chart
-  Bottom (opt): per-onset deviation from reference (spans full width)
+Each graph is shown in its own separate window so every panel can be
+zoomed, panned, and resized independently using the matplotlib toolbar.
+
+Default windows:
+  1 — Onset Alignment
+  2 — Fixed Chunks Accuracy
+  3 — Per-Onset Deviation from Reference  (if data available)
+
+Extra windows (--plot flag):
+  4 — Reference Channels Overlaid (waveforms)
 """
 
 from __future__ import annotations
@@ -14,8 +18,8 @@ from __future__ import annotations
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
-from matplotlib.gridspec import GridSpec
 from matplotlib.ticker import MultipleLocator, FuncFormatter
+
 
 
 def plot_default_graphs(
@@ -28,41 +32,38 @@ def plot_default_graphs(
     noise_sd: float = 30.0,
 ) -> None:
     """
-    Display the three default diagnostic graphs:
-      - Onset Alignment
-      - Relational Accuracy
-      - Per-Onset Relational Deviation (if data available)
+    Open each default diagnostic graph in its own window.
     """
-    has_ioi = bool(per_onset_relational)
-    n_rows = 2 + (1 if has_ioi else 0)
+    # --- Window 1: Onset Alignment ---
+    fig1, ax1 = plt.subplots(figsize=(12, 4))
+    fig1.canvas.manager.set_window_title("Onset Alignment")
+    _plot_onset_grid(ax1, human_onsets_ms, beat_ref_onsets_ms, rhythm_ref_onsets_ms)
+    fig1.tight_layout()
 
-    fig = plt.figure(figsize=(12, 4 * n_rows))
-    gs = GridSpec(n_rows, 1, figure=fig, hspace=0.55)
-
-    ax_align = fig.add_subplot(gs[0, 0])
-    ax_rel = fig.add_subplot(gs[1, 0])
-
-    fig.suptitle("Dual-Channel Rhythm Analysis", fontsize=14)
-
-    _plot_onset_grid(ax_align, human_onsets_ms, beat_ref_onsets_ms, rhythm_ref_onsets_ms)
-
+    # --- Window 2: Chunk Accuracy ---
+    fig2, ax2 = plt.subplots(figsize=(7, 5))
+    fig2.canvas.manager.set_window_title("Fixed Chunks — Accuracy")
     if fixed_result is not None:
         _plot_accuracy_bars(
-            ax_rel,
+            ax2,
             fixed_result["chunk_direct_accuracies"],
             pass_threshold,
-            title="Fixed Chunks — Direct IOI Accuracy",
+            title="Fixed Chunks — Onset-Deviation Accuracy",
         )
     else:
-        ax_rel.text(0.5, 0.5, "No fixed-chunk data", ha="center", va="center",
-                    transform=ax_rel.transAxes, color="gray")
-        ax_rel.set_axis_off()
+        ax2.text(0.5, 0.5, "No fixed-chunk data", ha="center", va="center",
+                 transform=ax2.transAxes, color="gray")
+        ax2.set_axis_off()
+    fig2.tight_layout()
 
-    if has_ioi:
-        ax_dev = fig.add_subplot(gs[2, 0])
-        _plot_ioi_deviations_ax(ax_dev, per_onset_relational, noise_sd)
+    # --- Window 3: Per-Onset Deviation ---
+    if per_onset_relational:
+        n = len(per_onset_relational)
+        fig3, ax3 = plt.subplots(figsize=(max(10, n * 0.55), 5))
+        fig3.canvas.manager.set_window_title("Per-Onset Deviation from Reference")
+        _plot_ioi_deviations_ax(ax3, per_onset_relational, noise_sd)
+        fig3.tight_layout()
 
-    plt.tight_layout()
     plt.show()
 
 
@@ -74,28 +75,14 @@ def plot_extra_graphs(
     pass_threshold: float = 100.0,
 ) -> None:
     """
-    Display additional diagnostic graphs (shown only with --plot flag):
-      - Reference Channels Overlaid (waveforms)
-      - Fixed Chunks — Direct IOI Accuracy
+    Open each extra diagnostic graph in its own window (--plot flag).
     """
-    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
-    fig.suptitle("Additional Diagnostics", fontsize=14)
+    # --- Window 4: Reference Waveforms ---
+    fig4, ax4 = plt.subplots(figsize=(12, 4))
+    fig4.canvas.manager.set_window_title("Reference Channels Overlaid")
+    _plot_overlaid_waveforms(ax4, beat_array, rhythm_array, sample_rate)
+    fig4.tight_layout()
 
-    _plot_overlaid_waveforms(axes[0], beat_array, rhythm_array, sample_rate)
-
-    if fixed_result is not None:
-        _plot_accuracy_bars(
-            axes[1],
-            fixed_result["chunk_direct_accuracies"],
-            pass_threshold,
-            title="Fixed Chunks — Direct IOI Accuracy",
-        )
-    else:
-        axes[1].text(0.5, 0.5, "No fixed-chunk data", ha="center", va="center",
-                     transform=axes[1].transAxes, color="gray")
-        axes[1].set_axis_off()
-
-    plt.tight_layout()
     plt.show()
 
 
@@ -108,9 +95,11 @@ def plot_ioi_deviations(
     noise_sd: float,
     title: str = "Per-Onset Deviation from Reference",
 ) -> None:
-    fig, ax = plt.subplots(figsize=(max(10, len(per_onset) * 0.6), 5))
+    n = len(per_onset)
+    fig, ax = plt.subplots(figsize=(max(10, n * 0.55), 5))
+    fig.canvas.manager.set_window_title(title)
     _plot_ioi_deviations_ax(ax, per_onset, noise_sd, title=title)
-    plt.tight_layout()
+    fig.tight_layout()
     plt.show()
 
 
