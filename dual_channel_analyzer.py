@@ -176,27 +176,28 @@ def analyze_dual(
     ref_iois = beat_iois if human_part == "beat" else rhythm_iois
     tol = _TOLERANCE_MULT * noise_sd
 
-    human_onsets = _onsets_from_iois(human_iois) + human_start_ms
+    # IOI start onsets only (exclude the trailing endpoint).
+    human_onsets = _onsets_from_iois(human_iois)[:-1] + human_start_ms
     ref_onsets = _onsets_from_iois(ref_iois)
 
-    # Align: find which reference onset the first human note corresponds to.
-    start_ref_idx = _nearest_idx(human_onsets[0], ref_onsets)
-    n = min(len(human_onsets), len(ref_onsets) - start_ref_idx)
-
+    # Each human onset independently finds its nearest reference onset.
+    # This keeps deviations accurate even when there is an extra or missing
+    # note mid-sequence — adjacent notes are not dragged into wrong positions.
     per_onset = []
-    for i in range(n):
-        h = float(human_onsets[i])
-        r = float(ref_onsets[start_ref_idx + i])
-        dev = h - r
+    for i, h in enumerate(human_onsets):
+        nearest_ref_idx = int(np.argmin(np.abs(ref_onsets - h)))
+        r = float(ref_onsets[nearest_ref_idx])
+        dev = float(h) - r
         per_onset.append({
             "index": i,
-            "human_onset_ms": h,
+            "human_onset_ms": float(h),
             "ref_onset_ms": r,
-            "deviation_ms": float(dev),
+            "deviation_ms": dev,
             "tolerance_ms": float(tol),
             "pass": bool(abs(dev) <= tol),
         })
 
+    n = len(per_onset)
     n_pass = sum(p["pass"] for p in per_onset)
     accuracy_pct = (n_pass / n * 100.0) if n > 0 else 0.0
 
