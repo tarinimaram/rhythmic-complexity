@@ -1,0 +1,8 @@
+python main_dual.py \
+    --reference "recordings/Recordings (rhythm + 12-8 beat R1).wav" \
+    --test "/Users/tarinimaram/rhythmic complexity project/Sequence_Phase3_5-12/Phase3_Test_BeatAlone_R1_5of5.wav" \
+    --human_part rhythm \
+    --beat_iois 800,800,800,800,800,800,800,800,800,800,800,800 \
+    --rhythm_iois 400,200,400,400,400,200,400,400,200,400,400,400,200,400,400,200,400,400,400,200,400,400,200,400,400,400,200,400 \
+    --noise_sd 30 \
+    --pass_threshold 100
