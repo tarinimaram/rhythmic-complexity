@@ -1,0 +1,10 @@
+python main_dual.py \
+    --reference "recordings/Recordings (rhythm + 12-8 beat R2).wav" \
+    --test "/Users/tarinimaram/Downloads/session_2026-10-08_151255/12-8/R2/session_2026-10-08_151255_Phase3_12-8_R2_BeatAlone_5of5.wav" \
+    --human_part rhythm \
+    --beat_iois 600,600,600,600,600,600,600,600,600,600,600,600,600,600,600,600 \
+    --rhythm_iois 400,200,400,400,400,200,400,400,200,400,400,400,200,400,400,200,400,400,400,200,400,400,200,400,400,400,200,400 \
+    --noise_sd 30 \
+    --ref_start_offset 200 \
+    --pass_threshold 100
+

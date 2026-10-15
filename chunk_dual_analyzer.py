@@ -7,7 +7,7 @@ missing note in one chunk does not corrupt subsequent chunks.
 
 Rules:
   - Chunk i gets the human notes whose nearest reference onset lives in
-    chunk i (greedy nearest-neighbor IOI assignment).
+    chunk i (boundaries at the midpoint between adjacent chunks' onsets).
   - If the human note count in a chunk != expected (chunk_size): the chunk
     is DISCARDED — scored as None, shown as gray in the plot.
   - Discarded chunks do not affect the evaluation of later chunks.
@@ -64,6 +64,7 @@ def fixed_dual_chunks(
     pass_threshold: float = 100.0,
     start_chunk: int = 0,
     human_start_ms: float = 0.0,
+    ref_start_offset_ms: float = 0.0,
 ) -> dict:
     """
     Divide the reference into 4 non-overlapping chunks and evaluate each one.
@@ -96,8 +97,12 @@ def fixed_dual_chunks(
     full_rhythm_iois = np.tile(rhythm_iois, _N_CHUNKS)[: _N_CHUNKS * _RHYTHM_CHUNK_SIZE]
     ref_iois = full_beat_iois if human_part == "beat" else full_rhythm_iois
 
-    # Absolute onset times.
-    ref_onsets = np.concatenate([[0.0], np.cumsum(ref_iois)])
+    # ref_start_offset_ms only applies to the rhythm reference (which may start
+    # on an offbeat); the beat reference always starts on the downbeat.
+    effective_offset_ms = ref_start_offset_ms if human_part == "rhythm" else 0.0
+
+    # Absolute onset times (shifted by effective_offset_ms for offbeat-starting rhythm sequences).
+    ref_onsets = effective_offset_ms + np.concatenate([[0.0], np.cumsum(ref_iois)])
     human_onsets_abs = human_start_ms + np.concatenate([[0.0], np.cumsum(human_iois)])
 
     # Start onsets of each IOI (all but the very last onset point).
@@ -105,13 +110,24 @@ def fixed_dual_chunks(
 
     tol = 2.0 * noise_sd
 
+    # Chunk boundaries sit at the midpoint between the last reference onset of
+    # one chunk and the first reference onset of the next, so each human note
+    # is assigned to the chunk containing its nearest reference onset.  An
+    # early or late downbeat therefore stays with its own chunk.
+    # boundaries[i] is the lower edge of chunk i; boundaries[i+1] its upper edge.
+    first_ioi = ref_onsets[1] - ref_onsets[0]
+    boundaries = [ref_onsets[0] - first_ioi / 2.0] + [
+        (ref_onsets[i * chunk_size - 1] + ref_onsets[i * chunk_size]) / 2.0
+        for i in range(1, _N_CHUNKS + 1)
+    ]
+
     direct_accs: list[float | None] = []
     relational_accs: list[float | None] = []
     all_per_onset: list[dict] = []
 
     for i in range(_N_CHUNKS):
-        chunk_ref_start = ref_onsets[i * chunk_size]
-        chunk_ref_end = ref_onsets[(i + 1) * chunk_size]
+        chunk_lo = boundaries[i]
+        chunk_hi = boundaries[i + 1]
 
         if i < start_chunk:
             # Human was silent here.
@@ -120,14 +136,10 @@ def fixed_dual_chunks(
             all_per_onset.extend([{"not_played": True}] * chunk_size)
             continue
 
-        # Assign IOIs to this chunk by time window.
-        # A note belongs to chunk i if its absolute onset is in
-        #   [chunk_ref_start - tol, chunk_ref_end - tol)
-        # The -tol shift ensures notes within the tolerance band of the
-        # chunk boundary are assigned to the chunk they're closest to
-        # rather than spilling into the adjacent chunk.
+        # Assign IOIs to this chunk by nearest reference onset: a note belongs
+        # to chunk i if its absolute onset is in [chunk_lo, chunk_hi).
         in_window = np.where(
-            (ioi_starts >= chunk_ref_start - tol) & (ioi_starts < chunk_ref_end - tol)
+            (ioi_starts >= chunk_lo) & (ioi_starts < chunk_hi)
         )[0]
         actual_count = len(in_window)
 
@@ -168,8 +180,7 @@ def fixed_dual_chunks(
         all_per_onset.extend(entries)
 
     # Any human notes that fell beyond the last reference chunk boundary.
-    last_ref_onset = ref_onsets[_N_CHUNKS * chunk_size]
-    extra_ioi_indices = [j for j, t in enumerate(ioi_starts) if t >= last_ref_onset]
+    extra_ioi_indices = [j for j, t in enumerate(ioi_starts) if t >= boundaries[_N_CHUNKS]]
     if extra_ioi_indices:
         r_phrase = ref_onsets[:chunk_size]
         for j in extra_ioi_indices:

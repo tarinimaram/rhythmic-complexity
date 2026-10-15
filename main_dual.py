@@ -39,6 +39,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                         help="Minimum accuracy %% required for each check to PASS.")
     parser.add_argument("--plot", action="store_true",
                         help="Show additional diagnostic plots (reference waveforms and direct IOI accuracy).")
+    parser.add_argument("--ref_start_offset", type=float, default=0.0, metavar="MS",
+                        help="Silence (ms) before the reference RHYTHM pattern's first note. "
+                             "Only applies when human_part is 'rhythm' — the beat reference "
+                             "always starts on the downbeat. Use 200 for rhythm sequences that "
+                             "start on an offbeat with a 200 ms lead-in.")
     return parser.parse_args(argv)
 
 
@@ -90,10 +95,13 @@ def main(argv: list[str] | None = None) -> int:
 
     # Determine which reference phrase the human started at.
     # The phrase duration is the sum of one chunk's worth of reference IOIs.
+    # ref_start_offset only applies to the rhythm reference (which may start on
+    # an offbeat); the beat reference always starts on the downbeat.
     ref_iois_for_part = beat_iois if args.human_part == "beat" else rhythm_iois
     phrase_len = 4 if args.human_part == "beat" else 7
     phrase_duration_ms = float(np.sum(ref_iois_for_part[:phrase_len]))
-    start_chunk = int(round(silence_ms / phrase_duration_ms))
+    effective_offset = args.ref_start_offset if args.human_part == "rhythm" else 0.0
+    start_chunk = int(round((silence_ms - effective_offset) / phrase_duration_ms))
     start_chunk = max(0, min(start_chunk, 3))  # clamp to [0, N_CHUNKS-1]
     print(f"  Phrase ≈ {phrase_duration_ms:.0f} ms → human starts at chunk {start_chunk + 1}")
 
@@ -106,6 +114,7 @@ def main(argv: list[str] | None = None) -> int:
         noise_sd=args.noise_sd,
         pass_threshold=args.pass_threshold,
         human_start_ms=silence_ms,
+        ref_start_offset_ms=args.ref_start_offset,
     )
     print_dual_report(result, args.noise_sd, args.pass_threshold)
 
@@ -114,13 +123,14 @@ def main(argv: list[str] | None = None) -> int:
         args.human_part, args.noise_sd, args.pass_threshold,
         start_chunk=start_chunk,
         human_start_ms=silence_ms,
+        ref_start_offset_ms=args.ref_start_offset,
     )
     print_chunk_dual_report(fixed_result, args.pass_threshold)
 
     from visualizer_dual import plot_default_graphs, plot_extra_graphs
     human_onsets_ms = silence_ms + _onsets_from_iois(human_iois)
     beat_ref_onsets_ms = _onsets_from_iois(beat_iois)
-    rhythm_ref_onsets_ms = _onsets_from_iois(rhythm_iois)
+    rhythm_ref_onsets_ms = args.ref_start_offset + _onsets_from_iois(rhythm_iois)
     per_onset = fixed_result.get("per_onset_relational") if fixed_result else None
     plot_default_graphs(
         human_onsets_ms=human_onsets_ms,

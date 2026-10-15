@@ -1,0 +1,8 @@
+python main_dual.py \
+    --reference "recordings/Recordings (rhythm + 3-4 beat R1).wav" \
+    --test "/Users/tarinimaram/rhythmic complexity project/earbuds_test_2026-06-10_140645/12-8/R1/earbuds_test_2026-06-10_140645_Phase2_12-8_R1_RhythmAlone_5of5.wav" \
+    --human_part beat \
+    --beat_iois 800,800,800,800,800,800,800,800,800,800,800,800 \
+    --rhythm_iois 400,400,200,400,400,400,200,400,400,200,400,400,400,200,400,400,200,400,400,400,200,400,400,200,400,400,400,200 \
+    --noise_sd 30 \
+    --pass_threshold 100

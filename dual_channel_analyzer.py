@@ -157,6 +157,7 @@ def analyze_dual(
     noise_sd: float,
     pass_threshold: float = 100.0,
     human_start_ms: float = 0.0,
+    ref_start_offset_ms: float = 0.0,
 ) -> dict:
     """
     Evaluate each human onset against its matched reference onset.
@@ -176,9 +177,13 @@ def analyze_dual(
     ref_iois = beat_iois if human_part == "beat" else rhythm_iois
     tol = _TOLERANCE_MULT * noise_sd
 
+    # ref_start_offset_ms only applies to the rhythm reference (which may start
+    # on an offbeat); the beat reference always starts on the downbeat.
+    effective_offset_ms = ref_start_offset_ms if human_part == "rhythm" else 0.0
+
     # IOI start onsets only (exclude the trailing endpoint).
     human_onsets = _onsets_from_iois(human_iois)[:-1] + human_start_ms
-    ref_onsets = _onsets_from_iois(ref_iois)
+    ref_onsets = _onsets_from_iois(ref_iois) + effective_offset_ms
 
     # Each human onset independently finds its nearest reference onset.
     # This keeps deviations accurate even when there is an extra or missing
